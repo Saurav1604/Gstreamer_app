@@ -1,5 +1,13 @@
 #include <gst/gst.h>
+#include <glib.h>
 #include <stdio.h>
+
+#ifdef G_OS_WIN32
+#include <conio.h>
+#else
+#include <termios.h>
+#include <unistd.h>
+#endif
 
 /* Structure to contain all our information */
 typedef struct _CustomData {
@@ -97,6 +105,45 @@ static gboolean refresh_ui(CustomData *data) {
     return TRUE;
 }
 
+/* Handler for keyboard input */
+static gboolean handle_keyboard(GIOChannel *source, GIOCondition condition, CustomData *data) {
+    gchar *str = NULL;
+    
+    if (g_io_channel_read_line(source, &str, NULL, NULL, NULL) == G_IO_STATUS_NORMAL) {
+        switch (g_ascii_tolower(str[0])) {
+            case 'p': {
+                /* Toggle between playing and paused */
+                if (data->playing) {
+                    g_print("\nPausing playback...\n");
+                    gst_element_set_state(data->playbin, GST_STATE_PAUSED);
+                } else {
+                    g_print("\nResuming playback...\n");
+                    gst_element_set_state(data->playbin, GST_STATE_PLAYING);
+                }
+                break;
+            }
+            case 's': {
+                /* Stop playback */
+                g_print("\nStopping playback...\n");
+                gst_element_set_state(data->playbin, GST_STATE_READY);
+                data->playing = FALSE;
+                break;
+            }
+            case 'q': {
+                /* Quit the application */
+                g_print("\nQuitting...\n");
+                data->terminate = TRUE;
+                g_main_loop_quit(data->loop);
+                break;
+            }
+            default:
+                break;
+        }
+    }
+    g_free(str);
+    return TRUE;
+}
+
 int main(int argc, char *argv[]) {
     CustomData data;
     GstBus *bus;
@@ -153,10 +200,22 @@ int main(int argc, char *argv[]) {
     /* Register a function that will periodically check for position changes */
     g_timeout_add_seconds(1, (GSourceFunc)refresh_ui, &data);
 
+    /* Add keyboard input handler */
+    GIOChannel *io_stdin = g_io_channel_unix_new(fileno(stdin));
+    g_io_add_watch(io_stdin, G_IO_IN, (GIOFunc)handle_keyboard, &data);
+
+    /* Print instructions */
+    g_print("\n=== Playback Controls ===\n");
+    g_print("Press 'P' to Play/Pause\n");
+    g_print("Press 'S' to Stop\n");
+    g_print("Press 'Q' to Quit\n");
+    g_print("=========================\n\n");
+
     /* Listen to the bus */
     g_main_loop_run(data.loop);
 
     /* Free resources */
+    g_io_channel_unref(io_stdin);
     g_main_loop_unref(data.loop);
     gst_object_unref(bus);
     gst_element_set_state(data.playbin, GST_STATE_NULL);
